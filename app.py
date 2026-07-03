@@ -1,3 +1,6 @@
+import fitz  # Ini adalah PyMuPDF, tambahkan di bagian paling atas kode
+import io
+from PIL import Image
 import base64
 import streamlit as st
 import pandas as pd
@@ -147,19 +150,25 @@ def generate_pdf(daftar_belanja, format_kertas='A4', client="", project="", doc_
     return pdf.output(dest='S').encode('latin-1')
 
 def display_pdf_preview(pdf_bytes):
-    # Mengonversi PDF bytes ke Base64
-    base64_pdf = base64.b64encode(pdf_bytes).decode('utf-8')
-    
-    # Membuat tag HTML Iframe
-    pdf_display = f'''
-        <iframe src="data:application/pdf;base64,{base64_pdf}" 
-                width="100%" height="600" 
-                type="application/pdf">
-        </iframe>
-    '''
-    
-    # Menampilkan ke Streamlit
-    st.markdown(pdf_display, unsafe_allow_html=True)
+    try:
+        # 1. Buka data PDF dari memori (bytes)
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+
+        # 2. Ambil halaman pertama (index 0)
+        page = doc.load_page(0)
+
+        # 3. Render halaman PDF menjadi gambar (Pixmap)
+        # dpi=150 membuat gambar cukup tajam untuk dibaca di layar
+        pix = page.get_pixmap(dpi=150)
+
+        # 4. Konversi pixmap ke format PNG yang dipahami Streamlit
+        img_data = pix.tobytes("png")
+
+        # 5. Tampilkan sebagai gambar biasa di Streamlit
+        st.image(img_data, caption="Pratinjau Dokumen", use_container_width=True)
+
+    except Exception as e:
+        st.error(f"Gagal menampilkan preview: {e}")
 
 st.title("📦 Sistem Database & Pengadaan")
 
