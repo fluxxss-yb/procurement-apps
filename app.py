@@ -4,12 +4,63 @@ import io
 import os
 import fitz  # PyMuPDF
 from fpdf import FPDF
+from github import Github
 import pandas as pd
 from PIL import Image
 import streamlit as st
 
+# --- KONFIGURASI GITHUB ---
+# Ambil kredensial dari Streamlit Secrets
+GITHUB_TOKEN = st.secrets.get('GITHUB_TOKEN', '')
+REPO_NAME = st.secrets.get(
+    'REPO_NAME', ''
+)  # Contoh: "username_anda/procurement-apps"
+BRANCH = st.secrets.get('BRANCH', 'main')
 
-# --- 1. DEFINISIKAN CLASS PDF TERLEBIH DAHULU ---
+DB_FILE = 'database.csv'
+SHOPPING_FILE = 'shopping_list_draft.csv'
+COLS = ['BRAND NAME', 'ITEM NAME', 'TYPE', 'SPECS']
+
+
+# --- FUNGSI UTAMA GITHUB API ---
+def update_file_to_github(file_path, content_str, commit_message):
+  """Fungsi pembantu untuk meng-update/commit file langsung ke repository GitHub."""
+  if not GITHUB_TOKEN or not REPO_NAME:
+    st.warning(
+        '⚠️ Token GitHub atau Repo Name belum dikonfigurasi di Streamlit'
+        ' Secrets. Perubahan hanya disimpan secara lokal.'
+    )
+    return False
+
+  try:
+    g = Github(GITHUB_TOKEN)
+    repo = g.get_repo(REPO_NAME)
+
+    try:
+      # Ambil metadata file jika sudah ada di GitHub
+      contents = repo.get_contents(file_path, ref=BRANCH)
+      repo.update_file(
+          path=file_path,
+          message=commit_message,
+          content=content_str,
+          sha=contents.sha,
+          branch=BRANCH,
+      )
+    except Exception:
+      # Jika file belum ada di GitHub, buat file baru
+      repo.create_file(
+          path=file_path,
+          message=f'Create {file_path}',
+          content=content_str,
+          branch=BRANCH,
+      )
+    return True
+  except Exception as e:
+    st.error(f'❌ Gagal memperbarui file {file_path} di GitHub: {e}')
+    return False
+
+
+# --- 1. DEFINISIKAN CLASS PDF ---
 class PDF(FPDF):
 
   def header(self):
@@ -26,12 +77,8 @@ class PDF(FPDF):
 # Konfigurasi Halaman
 st.set_page_config(page_title='Material System & Procurement', layout='wide')
 
-DB_FILE = 'database.csv'
-SHOPPING_FILE = 'shopping_list_draft.csv'
-COLS = ['BRAND NAME', 'ITEM NAME', 'TYPE', 'SPECS']
 
-
-# Fungsi untuk memuat daftar belanja dari file
+# --- FUNGSI DAFTAR BELANJA ---
 def load_shopping_list():
   if os.path.exists(SHOPPING_FILE):
     try:
@@ -48,16 +95,24 @@ def load_shopping_list():
   return []
 
 
-# Fungsi untuk menyimpan daftar belanja ke file
 def save_shopping_list(list_data):
+  # 1. Simpan ke lokal/server
   df_temp = pd.DataFrame(list_data)
   df_temp.to_csv(SHOPPING_FILE, index=False)
 
+  # 2. Sync otomatis langsung ke repository GitHub
+  csv_content = df_temp.to_csv(index=False)
+  update_file_to_github(
+      SHOPPING_FILE,
+      csv_content,
+      'Update shopping_list_draft.csv via Streamlit App',
+  )
 
+
+# --- FUNGSI DATABASE MASTER ---
 def load_data():
   if os.path.exists(DB_FILE):
     try:
-      # Baca CSV dengan fleksibilitas separator (Koma / Tab) & toleransi quote
       df = pd.read_csv(
           DB_FILE,
           sep=None,
@@ -66,15 +121,11 @@ def load_data():
           quotechar='"',
           on_bad_lines='skip',
       )
-
-      # Bersihkan nama kolom dari whitespace
       df.columns = df.columns.astype(str).str.strip()
 
-      # Filter baris dummy 'Pilih Item' jika terbaca di dalam CSV
       if 'BRAND NAME' in df.columns:
         df = df[df['BRAND NAME'].astype(str).str.strip() != 'Pilih Item']
 
-      # Pastikan 4 kolom utama tersedia dan bersihkan nilai spasi di setiap sel
       for col in COLS:
         if col not in df.columns:
           df[col] = ''
@@ -90,11 +141,18 @@ def load_data():
 
 def save_data(df):
   try:
-    # Pastikan hanya menyimpan 4 kolom utama ke file CSV menggunakan separator koma
     df_to_save = df[COLS].copy()
     for col in COLS:
       df_to_save[col] = df_to_save[col].astype(str).str.strip()
+
+    # 1. Simpan ke lokal
     df_to_save.to_csv(DB_FILE, index=False, sep=',')
+
+    # 2. Sync otomatis langsung ke repository GitHub
+    csv_content = df_to_save.to_csv(index=False, sep=',')
+    update_file_to_github(
+        DB_FILE, csv_content, 'Update database.csv via Streamlit App'
+    )
     return True
   except Exception as e:
     st.error(f'Gagal menyimpan database: {e}')
@@ -120,7 +178,6 @@ def generate_pdf(
   pdf = PDF(orientation='L', format=format_kertas)
   pdf.add_page()
 
-  # --- BAGIAN HEADER DINAMIS (DIBAWAH JUDUL) ---
   pdf.set_font('Arial', '', 10)
   pdf.cell(30, 7, 'Nama Client', 0, 0)
   pdf.cell(5, 7, ':', 0, 0)
@@ -164,7 +221,6 @@ def generate_pdf(
   w_date = usable_width * ratios['date']
   w_rem = usable_width * ratios['rem']
 
-  # --- HEADER TABEL ---
   pdf.set_fill_color(200, 220, 255)
   pdf.set_font('Arial', 'B', 10)
 
@@ -178,7 +234,6 @@ def generate_pdf(
   pdf.cell(w_date, 10, 'Due Date', 1, 0, 'C', 1)
   pdf.cell(w_rem, 10, 'Remarks', 1, 1, 'C', 1)
 
-  # --- ISI TABEL ---
   pdf.set_font('Arial', '', 9)
 
   def trim_text(text, width, font_size):
@@ -204,7 +259,6 @@ def generate_pdf(
     pdf.cell(w_date, h, str(item.get('Due Date', '')), 1, 0, 'C')
     pdf.cell(w_rem, h, trim_text(item.get('Remarks', ''), w_rem, 9), 1, 1, 'C')
 
-  # Mengembalikan byte data langsung (Kompatibilitas FPDF2)
   return bytes(pdf.output())
 
 
@@ -231,7 +285,6 @@ def set_menu(target):
 
 
 st.sidebar.header('🧭 Navigasi Menu')
-
 st.sidebar.button(
     '📊 View Database',
     on_click=set_menu,
@@ -336,10 +389,9 @@ if menu == 'Buat Daftar Belanja':
         }
         st.session_state['shopping_list'].append(new_entry)
         save_shopping_list(st.session_state['shopping_list'])
-        st.success('Barang ditambahkan!')
+        st.success('Barang berhasil ditambahkan dan disimpan ke GitHub!')
         st.rerun()
 
-    # --- FITUR PREVIEW & DRAFT ---
     if st.session_state['shopping_list']:
       st.divider()
 
@@ -431,8 +483,7 @@ if menu == 'Buat Daftar Belanja':
 
         if st.button('🗑️ Kosongkan Semua Daftar', type='secondary'):
           st.session_state['shopping_list'] = []
-          if os.path.exists(SHOPPING_FILE):
-            os.remove(SHOPPING_FILE)
+          save_shopping_list([])
           st.rerun()
 
       with tab2:
@@ -501,7 +552,9 @@ elif menu == 'Input Master Data':
               ignore_index=True,
           )
           save_data(st.session_state['data'])
-          st.success(f'Data {new_type} berhasil disimpan!')
+          st.success(
+              f'Data {new_type} berhasil disimpan & di-sync ke GitHub!'
+          )
           st.rerun()
       else:
         st.error('Mohon isi Brand, Item, dan Type!')
@@ -579,7 +632,7 @@ elif menu == 'Import Data':
 
         st.session_state['data'] = combined_df
         save_data(combined_df)
-        st.success('Data berhasil digabungkan dan disimpan!')
+        st.success('Data berhasil digabungkan dan diperbarui di GitHub!')
         st.rerun()
     else:
       st.error(
@@ -590,7 +643,6 @@ elif menu == 'Import Data':
 elif menu == 'View Database':
   st.subheader('Manajemen Database Barang')
 
-  # Reload data langsung dari file
   df = load_data()
   st.session_state['data'] = df
 
@@ -621,7 +673,7 @@ elif menu == 'View Database':
       df_updated = df.drop(idx).reset_index(drop=True)
       st.session_state['data'] = df_updated
       if save_data(df_updated):
-        st.success('Data berhasil dihapus!')
+        st.success('Data berhasil dihapus dari GitHub!')
         st.rerun()
 
     st.divider()
@@ -662,7 +714,7 @@ elif menu == 'View Database':
 
           st.session_state['data'] = df
           if save_data(df):
-            st.success('✅ Data berhasil diperbarui!')
+            st.success('✅ Data berhasil diperbarui di GitHub!')
             st.rerun()
   else:
     st.info('Database kosong.')
