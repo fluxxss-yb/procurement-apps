@@ -35,7 +35,12 @@ def load_shopping_list():
   if os.path.exists(SHOPPING_FILE):
     try:
       return pd.read_csv(
-          SHOPPING_FILE, on_bad_lines='skip', quotechar='"', escapechar='\\'
+          SHOPPING_FILE,
+          sep=None,
+          engine='python',
+          on_bad_lines='skip',
+          quotechar='"',
+          escapechar='\\',
       ).to_dict('records')
     except Exception:
       return []
@@ -52,10 +57,23 @@ def load_data():
   cols = ['BRAND NAME', 'ITEM NAME', 'TYPE', 'SPECS']
   if os.path.exists(DB_FILE):
     try:
+      # sep=None & engine='python' secara otomatis mendeteksi apakah pembatasnya Koma (,) atau Tab (\t)
       df = pd.read_csv(
-          DB_FILE, on_bad_lines='skip', quotechar='"', escapechar='\\'
+          DB_FILE,
+          sep=None,
+          engine='python',
+          on_bad_lines='skip',
+          quotechar='"',
+          escapechar='\\',
       )
-      df.columns = df.columns.astype(str).str.strip()  # Clear whitespace
+
+      # Bersihkan nama kolom dari whitespace atau karakter aneh
+      df.columns = df.columns.astype(str).str.strip()
+
+      # Hapus kolom temp select_label jika tidak sengaja tersimpan sebelumnya
+      if 'select_label' in df.columns:
+        df = df.drop(columns=['select_label'])
+
       for col in cols:
         if col not in df.columns:
           df[col] = ''
@@ -66,7 +84,7 @@ def load_data():
 
 
 def save_data(df):
-  # Pastikan kolom select_label tidak ikut tersimpan
+  # Pastikan kolom select_label tidak ikut tersimpan ke CSV
   if 'select_label' in df.columns:
     df = df.drop(columns=['select_label'])
   df.to_csv(DB_FILE, index=False)
@@ -522,7 +540,12 @@ elif menu == 'Import Data':
   if uploaded_file:
     if uploaded_file.name.endswith('.csv'):
       new_df = pd.read_csv(
-          uploaded_file, on_bad_lines='skip', quotechar='"', escapechar='\\'
+          uploaded_file,
+          sep=None,
+          engine='python',
+          on_bad_lines='skip',
+          quotechar='"',
+          escapechar='\\',
       )
     else:
       new_df = pd.read_excel(uploaded_file)
@@ -549,38 +572,38 @@ elif menu == 'Import Data':
 # --- MENU: VIEW DATABASE ---
 elif menu == 'View Database':
   st.subheader('Manajemen Database Barang')
-  df = st.session_state['data']
+
+  # Muat ulang data secara eksplisit agar perubahan delimiter/kolom langsung diterapkan
+  df = load_data()
+  st.session_state['data'] = df
 
   if not df.empty:
-    # Memastikan kolom penting ada sebelum membuat select_label
     required = ['BRAND NAME', 'ITEM NAME', 'TYPE']
 
     if all(col in df.columns for col in required):
-      # PEMBERSIHAN NAMA KOLOM & AMAN DARI KEYERROR
-      df.columns = df.columns.astype(str).str.strip()
-
       st.dataframe(df, use_container_width=True)
       st.divider()
 
-      df['select_label'] = (
-          df['BRAND NAME'].astype(str)
+      df_temp = df.copy()
+      df_temp['select_label'] = (
+          df_temp['BRAND NAME'].astype(str)
           + ' | '
-          + df['ITEM NAME'].astype(str)
+          + df_temp['ITEM NAME'].astype(str)
           + ' ('
-          + df['TYPE'].astype(str)
+          + df_temp['TYPE'].astype(str)
           + ')'
       )
 
       st.subheader('📝 Ubah / 🗑️ Hapus Data')
       selected_item = st.selectbox(
-          'Pilih data yang akan dikelola:', df['select_label'].unique()
+          'Pilih data yang akan dikelola:', df_temp['select_label'].unique()
       )
 
-      idx = df[df['select_label'] == selected_item].index[0]
+      idx = df_temp[df_temp['select_label'] == selected_item].index[0]
       data_lama = df.iloc[idx]
 
       if st.button('🗑️ Hapus Baris Ini', type='secondary'):
-        df_updated = df.drop(idx).drop(columns=['select_label'])
+        df_updated = df.drop(idx)
         st.session_state['data'] = df_updated
         if save_data(df_updated):
           st.success('Data berhasil dihapus!')
@@ -622,10 +645,8 @@ elif menu == 'View Database':
             df.at[idx, 'TYPE'] = edit_type.strip()
             df.at[idx, 'SPECS'] = edit_specs.strip()
 
-            df_final = df.drop(columns=['select_label'])
-
-            st.session_state['data'] = df_final
-            if save_data(df_final):
+            st.session_state['data'] = df
+            if save_data(df):
               st.success('✅ Data berhasil diperbarui!')
               st.rerun()
     else:
