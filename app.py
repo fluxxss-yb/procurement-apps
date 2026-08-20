@@ -8,6 +8,7 @@ import pandas as pd
 from PIL import Image
 import streamlit as st
 
+
 # --- 1. DEFINISIKAN CLASS PDF TERLEBIH DAHULU ---
 class PDF(FPDF):
 
@@ -203,7 +204,8 @@ def generate_pdf(
     pdf.cell(w_date, h, str(item.get('Due Date', '')), 1, 0, 'C')
     pdf.cell(w_rem, h, trim_text(item.get('Remarks', ''), w_rem, 9), 1, 1, 'C')
 
-  return pdf.output(dest='S').encode('latin-1')
+  # Mengembalikan byte data langsung (Kompatibilitas FPDF2)
+  return bytes(pdf.output())
 
 
 def display_pdf_preview(pdf_bytes):
