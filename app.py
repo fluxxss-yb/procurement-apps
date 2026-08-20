@@ -8,7 +8,6 @@ import pandas as pd
 from PIL import Image
 import streamlit as st
 
-
 # --- 1. DEFINISIKAN CLASS PDF TERLEBIH DAHULU ---
 class PDF(FPDF):
 
@@ -28,6 +27,7 @@ st.set_page_config(page_title='Material System & Procurement', layout='wide')
 
 DB_FILE = 'database.csv'
 SHOPPING_FILE = 'shopping_list_draft.csv'
+COLS = ['BRAND NAME', 'ITEM NAME', 'TYPE', 'SPECS']
 
 
 # Fungsi untuk memuat daftar belanja dari file
@@ -54,41 +54,50 @@ def save_shopping_list(list_data):
 
 
 def load_data():
-  cols = ['BRAND NAME', 'ITEM NAME', 'TYPE', 'SPECS']
   if os.path.exists(DB_FILE):
     try:
-      # sep=None & engine='python' secara otomatis mendeteksi apakah pembatasnya Koma (,) atau Tab (\t)
+      # Baca CSV dengan fleksibilitas separator (Koma / Tab) & toleransi quote
       df = pd.read_csv(
           DB_FILE,
           sep=None,
           engine='python',
-          on_bad_lines='skip',
+          dtype=str,
           quotechar='"',
-          escapechar='\\',
+          on_bad_lines='skip',
       )
 
-      # Bersihkan nama kolom dari whitespace atau karakter aneh
+      # Bersihkan nama kolom dari whitespace
       df.columns = df.columns.astype(str).str.strip()
 
-      # Hapus kolom temp select_label jika tidak sengaja tersimpan sebelumnya
-      if 'select_label' in df.columns:
-        df = df.drop(columns=['select_label'])
+      # Filter baris dummy 'Pilih Item' jika terbaca di dalam CSV
+      if 'BRAND NAME' in df.columns:
+        df = df[df['BRAND NAME'].astype(str).str.strip() != 'Pilih Item']
 
-      for col in cols:
+      # Pastikan 4 kolom utama tersedia dan bersihkan nilai spasi di setiap sel
+      for col in COLS:
         if col not in df.columns:
           df[col] = ''
-      return df
-    except Exception:
-      return pd.DataFrame(columns=cols)
-  return pd.DataFrame(columns=cols)
+        else:
+          df[col] = df[col].fillna('').astype(str).str.strip()
+
+      return df[COLS].reset_index(drop=True)
+    except Exception as e:
+      st.error(f'Gagal membaca database: {e}')
+      return pd.DataFrame(columns=COLS)
+  return pd.DataFrame(columns=COLS)
 
 
 def save_data(df):
-  # Pastikan kolom select_label tidak ikut tersimpan ke CSV
-  if 'select_label' in df.columns:
-    df = df.drop(columns=['select_label'])
-  df.to_csv(DB_FILE, index=False)
-  return True
+  try:
+    # Pastikan hanya menyimpan 4 kolom utama ke file CSV menggunakan separator koma
+    df_to_save = df[COLS].copy()
+    for col in COLS:
+      df_to_save[col] = df_to_save[col].astype(str).str.strip()
+    df_to_save.to_csv(DB_FILE, index=False, sep=',')
+    return True
+  except Exception as e:
+    st.error(f'Gagal menyimpan database: {e}')
+    return False
 
 
 # Inisialisasi Session States
@@ -114,19 +123,19 @@ def generate_pdf(
   pdf.set_font('Arial', '', 10)
   pdf.cell(30, 7, 'Nama Client', 0, 0)
   pdf.cell(5, 7, ':', 0, 0)
-  pdf.cell(60, 7, client, 0, 0)
+  pdf.cell(60, 7, str(client), 0, 0)
 
   pdf.cell(40, 7, 'Nomor PO', 0, 0)
   pdf.cell(5, 7, ':', 0, 0)
-  pdf.cell(0, 7, doc_no, 0, 1)
+  pdf.cell(0, 7, str(doc_no), 0, 1)
 
   pdf.cell(30, 7, 'Divisi', 0, 0)
   pdf.cell(5, 7, ':', 0, 0)
-  pdf.cell(60, 7, dvs, 0, 0)
+  pdf.cell(60, 7, str(dvs), 0, 0)
 
   pdf.cell(40, 7, 'Nama Proyek', 0, 0)
   pdf.cell(5, 7, ':', 0, 0)
-  pdf.cell(0, 7, project, 0, 1)
+  pdf.cell(0, 7, str(project), 0, 1)
 
   pdf.ln(5)
 
@@ -170,26 +179,29 @@ def generate_pdf(
 
   # --- ISI TABEL ---
   pdf.set_font('Arial', '', 9)
+
+  def trim_text(text, width, font_size):
+    max_chars = int(width / (font_size * 0.18))
+    text_str = str(text)
+    return (
+        (text_str[: max_chars - 3] + '..')
+        if len(text_str) > max_chars
+        else text_str
+    )
+
   for i, item in enumerate(daftar_belanja, 1):
     h = 8
     pdf.cell(w_no, h, str(i), 1, 0, 'C')
-
-    def trim_text(text, width, font_size):
-      max_chars = int(width / (font_size * 0.18))
-      return (
-          (text[: max_chars - 3] + '..') if len(text) > max_chars else text
-      )
-
-    pdf.cell(w_item, h, trim_text(str(item['Item Name']), w_item, 9), 1, 0, 'C')
+    pdf.cell(w_item, h, trim_text(item.get('Item Name', ''), w_item, 9), 1, 0, 'C')
     pdf.cell(
-        w_brand, h, trim_text(str(item['Brand Name']), w_brand, 9), 1, 0, 'C'
+        w_brand, h, trim_text(item.get('Brand Name', ''), w_brand, 9), 1, 0, 'C'
     )
-    pdf.cell(w_type, h, trim_text(str(item['Type']), w_type, 9), 1, 0, 'C')
-    pdf.cell(w_specs, h, trim_text(str(item['Specs']), w_specs, 9), 1, 0, 'C')
-    pdf.cell(w_qty, h, str(item['Qty']), 1, 0, 'C')
-    pdf.cell(w_unit, h, str(item['Unit']), 1, 0, 'C')
-    pdf.cell(w_date, h, str(item['Due Date']), 1, 0, 'C')
-    pdf.cell(w_rem, h, trim_text(str(item['Remarks']), w_rem, 9), 1, 1, 'C')
+    pdf.cell(w_type, h, trim_text(item.get('Type', ''), w_type, 9), 1, 0, 'C')
+    pdf.cell(w_specs, h, trim_text(item.get('Specs', ''), w_specs, 9), 1, 0, 'C')
+    pdf.cell(w_qty, h, str(item.get('Qty', 1)), 1, 0, 'C')
+    pdf.cell(w_unit, h, str(item.get('Unit', '')), 1, 0, 'C')
+    pdf.cell(w_date, h, str(item.get('Due Date', '')), 1, 0, 'C')
+    pdf.cell(w_rem, h, trim_text(item.get('Remarks', ''), w_rem, 9), 1, 1, 'C')
 
   return pdf.output(dest='S').encode('latin-1')
 
@@ -317,7 +329,7 @@ if menu == 'Buat Daftar Belanja':
             'Specs': current_specs,
             'Qty': qty,
             'Unit': unit,
-            'Due Date': d_date,
+            'Due Date': str(d_date),
             'Remarks': remarks,
         }
         st.session_state['shopping_list'].append(new_entry)
@@ -325,7 +337,7 @@ if menu == 'Buat Daftar Belanja':
         st.success('Barang ditambahkan!')
         st.rerun()
 
-    # --- FITUR PREVIEW ---
+    # --- FITUR PREVIEW & DRAFT ---
     if st.session_state['shopping_list']:
       st.divider()
 
@@ -386,7 +398,7 @@ if menu == 'Buat Daftar Belanja':
             with st.popover('📝'):
               st.write(f'Edit Item {idx+1}')
               edit_qty = st.number_input(
-                  'Qty', value=item['Qty'], key=f'eqty_{idx}'
+                  'Qty', value=int(item['Qty']), key=f'eqty_{idx}'
               )
 
               units_option = ['pcs', 'lot', 'set', 'unit', 'mtr']
@@ -399,17 +411,17 @@ if menu == 'Buat Daftar Belanja':
                   'Unit', units_option, index=unit_idx, key=f'eunit_{idx}'
               )
 
-              edit_date = st.date_input(
-                  'Due Date', value=item['Due Date'], key=f'edate_{idx}'
-              )
+              edit_date = st.date_input('Due Date', key=f'edate_{idx}')
               edit_rem = st.text_input(
-                  'Remarks', value=item['Remarks'], key=f'erem_{idx}'
+                  'Remarks', value=str(item['Remarks']), key=f'erem_{idx}'
               )
 
               if st.button('Update', key=f'upd_{idx}'):
                 st.session_state['shopping_list'][idx]['Qty'] = edit_qty
                 st.session_state['shopping_list'][idx]['Unit'] = edit_unit
-                st.session_state['shopping_list'][idx]['Due Date'] = edit_date
+                st.session_state['shopping_list'][idx]['Due Date'] = str(
+                    edit_date
+                )
                 st.session_state['shopping_list'][idx]['Remarks'] = edit_rem
                 save_shopping_list(st.session_state['shopping_list'])
                 st.success('Terupdate!')
@@ -464,9 +476,9 @@ elif menu == 'Input Master Data':
     if submit_button:
       if new_brand and new_item and new_type:
         is_duplicate = (
-            (df['BRAND NAME'].astype(str) == new_brand)
-            & (df['ITEM NAME'].astype(str) == new_item)
-            & (df['TYPE'].astype(str) == new_type)
+            (df['BRAND NAME'].astype(str) == new_brand.strip())
+            & (df['ITEM NAME'].astype(str) == new_item.strip())
+            & (df['TYPE'].astype(str) == new_type.strip())
         ).any()
 
         if is_duplicate:
@@ -543,116 +555,112 @@ elif menu == 'Import Data':
           uploaded_file,
           sep=None,
           engine='python',
+          dtype=str,
           on_bad_lines='skip',
           quotechar='"',
-          escapechar='\\',
       )
     else:
-      new_df = pd.read_excel(uploaded_file)
+      new_df = pd.read_excel(uploaded_file, dtype=str)
 
-    # Bersihkan spasi dari header file yang diunggah
     new_df.columns = new_df.columns.astype(str).str.strip()
 
-    required = ['BRAND NAME', 'ITEM NAME', 'TYPE', 'SPECS']
-    if all(col in new_df.columns for col in required):
+    if all(col in new_df.columns for col in COLS):
       if st.button('Gabungkan ke Database'):
         combined_df = pd.concat(
-            [st.session_state['data'], new_df[required]], ignore_index=True
+            [st.session_state['data'], new_df[COLS]], ignore_index=True
         )
+
+        for col in COLS:
+          combined_df[col] = combined_df[col].fillna('').astype(str).str.strip()
+
         combined_df = combined_df.drop_duplicates()
 
         st.session_state['data'] = combined_df
         save_data(combined_df)
         st.success('Data berhasil digabungkan dan disimpan!')
+        st.rerun()
     else:
       st.error(
-          f'Format file tidak valid. Pastikan ada kolom: {", ".join(required)}'
+          f'Format file tidak valid. Pastikan ada kolom: {", ".join(COLS)}'
       )
 
 # --- MENU: VIEW DATABASE ---
 elif menu == 'View Database':
   st.subheader('Manajemen Database Barang')
 
-  # Muat ulang data secara eksplisit agar perubahan delimiter/kolom langsung diterapkan
+  # Reload data langsung dari file
   df = load_data()
   st.session_state['data'] = df
 
   if not df.empty:
-    required = ['BRAND NAME', 'ITEM NAME', 'TYPE']
+    st.write(f'Total Data Terbaca: **{len(df)}** item')
+    st.dataframe(df, use_container_width=True)
+    st.divider()
 
-    if all(col in df.columns for col in required):
-      st.dataframe(df, use_container_width=True)
-      st.divider()
+    df_temp = df.copy()
+    df_temp['select_label'] = (
+        df_temp['BRAND NAME'].astype(str)
+        + ' | '
+        + df_temp['ITEM NAME'].astype(str)
+        + ' ('
+        + df_temp['TYPE'].astype(str)
+        + ')'
+    )
 
-      df_temp = df.copy()
-      df_temp['select_label'] = (
-          df_temp['BRAND NAME'].astype(str)
-          + ' | '
-          + df_temp['ITEM NAME'].astype(str)
-          + ' ('
-          + df_temp['TYPE'].astype(str)
-          + ')'
+    st.subheader('📝 Ubah / 🗑️ Hapus Data')
+    selected_item = st.selectbox(
+        'Pilih data yang akan dikelola:', df_temp['select_label'].unique()
+    )
+
+    idx = df_temp[df_temp['select_label'] == selected_item].index[0]
+    data_lama = df.iloc[idx]
+
+    if st.button('🗑️ Hapus Baris Ini', type='secondary'):
+      df_updated = df.drop(idx).reset_index(drop=True)
+      st.session_state['data'] = df_updated
+      if save_data(df_updated):
+        st.success('Data berhasil dihapus!')
+        st.rerun()
+
+    st.divider()
+
+    st.subheader(f"Edit Data: {data_lama['TYPE']}")
+    with st.form('form_edit', clear_on_submit=False):
+      edit_brand = st.text_input(
+          'Ubah Brand', value=str(data_lama['BRAND NAME'])
+      )
+      edit_item = st.text_input(
+          'Ubah Nama Item', value=str(data_lama['ITEM NAME'])
+      )
+      edit_type = st.text_input('Ubah Type', value=str(data_lama['TYPE']))
+      edit_specs = st.text_area(
+          'Ubah Spesifikasi', value=str(data_lama['SPECS'])
       )
 
-      st.subheader('📝 Ubah / 🗑️ Hapus Data')
-      selected_item = st.selectbox(
-          'Pilih data yang akan dikelola:', df_temp['select_label'].unique()
-      )
+      save_edit = st.form_submit_button('💾 Simpan Perubahan')
 
-      idx = df_temp[df_temp['select_label'] == selected_item].index[0]
-      data_lama = df.iloc[idx]
+      if save_edit:
+        is_duplicate = (
+            (df.index != idx)
+            & (df['BRAND NAME'] == edit_brand.strip())
+            & (df['ITEM NAME'] == edit_item.strip())
+            & (df['TYPE'] == edit_type.strip())
+        ).any()
 
-      if st.button('🗑️ Hapus Baris Ini', type='secondary'):
-        df_updated = df.drop(idx)
-        st.session_state['data'] = df_updated
-        if save_data(df_updated):
-          st.success('Data berhasil dihapus!')
-          st.rerun()
+        if is_duplicate:
+          st.error(
+              '❌ Perubahan gagal! Kombinasi Brand, Item, dan Type tersebut'
+              ' sudah ada di data lain.'
+          )
+        else:
+          df.at[idx, 'BRAND NAME'] = edit_brand.strip()
+          df.at[idx, 'ITEM NAME'] = edit_item.strip()
+          df.at[idx, 'TYPE'] = edit_type.strip()
+          df.at[idx, 'SPECS'] = edit_specs.strip()
 
-      st.divider()
-
-      st.subheader(f"Edit Data: {data_lama['TYPE']}")
-      with st.form('form_edit', clear_on_submit=False):
-        edit_brand = st.text_input(
-            'Ubah Brand', value=str(data_lama['BRAND NAME'])
-        )
-        edit_item = st.text_input(
-            'Ubah Nama Item', value=str(data_lama['ITEM NAME'])
-        )
-        edit_type = st.text_input('Ubah Type', value=str(data_lama['TYPE']))
-        edit_specs = st.text_area(
-            'Ubah Spesifikasi', value=str(data_lama['SPECS'])
-        )
-
-        save_edit = st.form_submit_button('💾 Simpan Perubahan')
-
-        if save_edit:
-          is_duplicate = (
-              (df.index != idx)
-              & (df['BRAND NAME'] == edit_brand.strip())
-              & (df['ITEM NAME'] == edit_item.strip())
-              & (df['TYPE'] == edit_type.strip())
-          ).any()
-
-          if is_duplicate:
-            st.error(
-                '❌ Perubahan gagal! Kombinasi Brand, Item, dan Type tersebut'
-                ' sudah ada di data lain.'
-            )
-          else:
-            df.at[idx, 'BRAND NAME'] = edit_brand.strip()
-            df.at[idx, 'ITEM NAME'] = edit_item.strip()
-            df.at[idx, 'TYPE'] = edit_type.strip()
-            df.at[idx, 'SPECS'] = edit_specs.strip()
-
-            st.session_state['data'] = df
-            if save_data(df):
-              st.success('✅ Data berhasil diperbarui!')
-              st.rerun()
-    else:
-      st.error(
-          f'File CSV memiliki nama kolom yang salah. Ditemukan:'
-          f' {list(df.columns)}'
-      )
+          st.session_state['data'] = df
+          if save_data(df):
+            st.success('✅ Data berhasil diperbarui!')
+            st.rerun()
   else:
     st.info('Database kosong.')
