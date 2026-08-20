@@ -29,7 +29,10 @@ SHOPPING_FILE = 'shopping_list_draft.csv'
 # Fungsi untuk memuat daftar belanja dari file
 def load_shopping_list():
     if os.path.exists(SHOPPING_FILE):
-        return pd.read_csv(SHOPPING_FILE).to_dict('records')
+        try:
+            return pd.read_csv(SHOPPING_FILE, on_bad_lines='skip', quotechar='"', escapechar='\\').to_dict('records')
+        except Exception:
+            return []
     return []
 
 # Fungsi untuk menyimpan daftar belanja ke file
@@ -39,7 +42,10 @@ def save_shopping_list(list_data):
 
 def load_data():
     if os.path.exists(DB_FILE):
-        return pd.read_csv(DB_FILE)
+        try:
+            return pd.read_csv(DB_FILE, on_bad_lines='skip', quotechar='"', escapechar='\\')
+        except Exception:
+            return pd.DataFrame(columns=['BRAND NAME', 'ITEM NAME', 'TYPE', 'SPECS'])
     return pd.DataFrame(columns=['BRAND NAME', 'ITEM NAME', 'TYPE', 'SPECS'])
 
 def save_data(df):
@@ -192,7 +198,7 @@ if menu == "Buat Daftar Belanja":
             res = df[(df['BRAND NAME'] == sel_brand) & 
                      (df['ITEM NAME'] == sel_item) & 
                      (df['TYPE'] == sel_type)]
-        
+            
             if not res.empty:
                 st.info(f"**Spesifikasi:** {res['SPECS'].values[0]}")
             
@@ -406,7 +412,7 @@ elif menu == "Import Data":
     
     if uploaded_file:
         if uploaded_file.name.endswith('.csv'):
-            new_df = pd.read_csv(uploaded_file)
+            new_df = pd.read_csv(uploaded_file, on_bad_lines='skip', quotechar='"', escapechar='\\')
         else:
             new_df = pd.read_excel(uploaded_file)
         
